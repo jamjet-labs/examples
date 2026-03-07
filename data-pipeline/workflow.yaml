@@ -1,0 +1,116 @@
+# data-pipeline: durable ETL pipeline with parallel processing
+#
+# Demonstrates: parallel branches, HTTP nodes, checkpointing
+#
+# Usage:
+#   jamjet run workflow.yaml --input '{"date": "2026-03-07", "sources": ["api1", "api2", "api3"]}'
+
+workflow:
+  id: data-pipeline
+  version: 0.1.0
+  state_schema:
+    date: str
+    sources: list
+    raw_data: dict
+    cleaned: dict
+    summary: str
+    report_url: str
+  start: extract
+
+nodes:
+  extract:
+    type: parallel
+    branches:
+      - fetch-api1
+      - fetch-api2
+      - fetch-api3
+    join: transform
+
+  fetch-api1:
+    type: http
+    method: GET
+    url: "{{ env.API1_URL }}/data?date={{ state.date }}"
+    headers:
+      Authorization: "Bearer {{ env.API1_TOKEN }}"
+    output_key: raw_api1
+    retry:
+      max_attempts: 3
+      backoff: exponential
+      delay_ms: 1000
+
+  fetch-api2:
+    type: http
+    method: GET
+    url: "{{ env.API2_URL }}/export?from={{ state.date }}"
+    headers:
+      X-Api-Key: "{{ env.API2_KEY }}"
+    output_key: raw_api2
+    retry:
+      max_attempts: 3
+      backoff: exponential
+      delay_ms: 1000
+
+  fetch-api3:
+    type: http
+    method: POST
+    url: "{{ env.API3_URL }}/query"
+    body:
+      date_range: { start: "{{ state.date }}", end: "{{ state.date }}" }
+      format: json
+    headers:
+      Authorization: "Bearer {{ env.API3_TOKEN }}"
+    output_key: raw_api3
+    retry:
+      max_attempts: 3
+      backoff: exponential
+      delay_ms: 2000
+
+  transform:
+    type: model
+    model: claude-haiku-4-5-20251001
+    system: |
+      You are a data transformation assistant.
+      Output clean, normalized JSON only — no explanation.
+    prompt: |
+      Merge and normalize these data sources for {{ state.date }}:
+
+      API1: {{ state.raw_api1 }}
+      API2: {{ state.raw_api2 }}
+      API3: {{ state.raw_api3 }}
+
+      Output a single normalized JSON object with:
+      - metrics: dict of key metric names to values
+      - anomalies: list of any unusual values
+      - completeness: float 0-1 (fraction of expected data received)
+    output_key: cleaned
+    next: summarize
+
+  summarize:
+    type: model
+    model: claude-sonnet-4-6
+    prompt: |
+      Write a concise data pipeline report for {{ state.date }}:
+
+      Normalized data:
+      {{ state.cleaned }}
+
+      Include: key metrics, anomalies found, data completeness, recommended actions.
+    output_key: summary
+    next: store-report
+
+  store-report:
+    type: http
+    method: POST
+    url: "{{ env.REPORTS_URL }}/reports"
+    headers:
+      Authorization: "Bearer {{ env.REPORTS_TOKEN }}"
+      Content-Type: application/json
+    body:
+      date: "{{ state.date }}"
+      summary: "{{ state.summary }}"
+      data: "{{ state.cleaned }}"
+    output_key: report_url
+    next: end
+
+  end:
+    type: end

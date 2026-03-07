@@ -1,0 +1,92 @@
+# sql-agent: natural language to SQL query execution via MCP
+#
+# Prerequisites:
+#   export DATABASE_URL=postgresql://user:password@host:5432/db
+#
+# Usage:
+#   jamjet run workflow.yaml --input '{"question": "How many users signed up last week?"}'
+
+workflow:
+  id: sql-agent
+  version: 0.1.0
+  state_schema:
+    question: str
+    schema: str
+    sql: str
+    results: list
+    answer: str
+  start: get-schema
+
+nodes:
+  get-schema:
+    type: tool
+    server: postgres
+    tool: get_schema
+    arguments: {}
+    output_key: schema
+    next: generate-sql
+
+  generate-sql:
+    type: model
+    model: claude-sonnet-4-6
+    system: |
+      You are a SQL expert. Generate safe, read-only SELECT queries.
+      Never generate INSERT, UPDATE, DELETE, DROP, or DDL statements.
+      Output JSON with keys: sql (string), explanation (string).
+    prompt: |
+      Database schema:
+      {{ state.schema }}
+
+      Question: {{ state.question }}
+
+      Generate a SQL query to answer this question.
+    output_key: sql_response
+    next: validate-sql
+
+  validate-sql:
+    type: branch
+    conditions:
+      - if: "'SELECT' in state.sql_response.sql.upper() and 'DROP' not in state.sql_response.sql.upper()"
+        next: run-query
+    default: reject-sql
+
+  run-query:
+    type: tool
+    server: postgres
+    tool: run_query
+    arguments:
+      sql: "{{ state.sql_response.sql }}"
+    output_key: results
+    retry:
+      max_attempts: 2
+      backoff: constant
+      delay_ms: 500
+    next: answer
+
+  answer:
+    type: model
+    model: claude-haiku-4-5-20251001
+    prompt: |
+      Question: {{ state.question }}
+
+      SQL used: {{ state.sql_response.sql }}
+
+      Query results:
+      {{ state.results }}
+
+      Explain the results in plain English, answering the original question.
+    output_key: answer
+    next: end
+
+  reject-sql:
+    type: model
+    model: claude-haiku-4-5-20251001
+    prompt: |
+      The generated SQL query was rejected for safety reasons.
+      Explain to the user that the question "{{ state.question }}" cannot be safely answered
+      and suggest how they could rephrase it as a read-only query.
+    output_key: answer
+    next: end
+
+  end:
+    type: end

@@ -1,0 +1,96 @@
+# orchestrator: multi-agent delegation via A2A protocol
+#
+# This workflow acts as an orchestrator that delegates subtasks to specialist agents.
+# Requires specialist agents to be running — see README for setup.
+#
+# Usage:
+#   jamjet run workflow.yaml --input '{"task": "Write a technical blog post about JamJet"}'
+
+workflow:
+  id: orchestrator
+  version: 0.1.0
+  state_schema:
+    task: str
+    plan: dict
+    research: dict
+    outline: str
+    draft: str
+    fact_check: dict
+    final: str
+  start: plan
+
+nodes:
+  plan:
+    type: model
+    model: claude-sonnet-4-6
+    system: |
+      You are an orchestrator that breaks complex tasks into subtasks for specialist agents.
+      Output JSON with keys: research_query, content_type, target_audience, key_points (list).
+    prompt: |
+      Break this task into subtasks:
+      {{ state.task }}
+    output_key: plan
+    next: parallel-gather
+
+  parallel-gather:
+    type: parallel
+    branches:
+      - research
+      - outline
+    join: draft
+
+  research:
+    type: a2a_task
+    agent_url: "{{ env.RESEARCH_AGENT_URL }}"
+    input:
+      query: "{{ state.plan.research_query }}"
+    output_key: research
+
+  outline:
+    type: model
+    model: claude-haiku-4-5-20251001
+    prompt: |
+      Create a detailed outline for {{ state.plan.content_type }}:
+      Topic: {{ state.task }}
+      Target audience: {{ state.plan.target_audience }}
+      Key points to cover: {{ state.plan.key_points | join(', ') }}
+    output_key: outline
+
+  draft:
+    type: a2a_task
+    agent_url: "{{ env.WRITER_AGENT_URL }}"
+    input:
+      task: "{{ state.task }}"
+      outline: "{{ state.outline }}"
+      research: "{{ state.research }}"
+      content_type: "{{ state.plan.content_type }}"
+    output_key: draft
+    next: fact-check
+
+  fact-check:
+    type: a2a_task
+    agent_url: "{{ env.FACT_CHECK_AGENT_URL }}"
+    input:
+      content: "{{ state.draft }}"
+      research: "{{ state.research }}"
+    output_key: fact_check
+    next: finalize
+
+  finalize:
+    type: model
+    model: claude-sonnet-4-6
+    prompt: |
+      Review the draft and fact-check results, then produce the final version.
+
+      Draft:
+      {{ state.draft }}
+
+      Fact-check issues found:
+      {{ state.fact_check.issues | join('\n') if state.fact_check.issues else "None" }}
+
+      Produce the final, polished version addressing any issues.
+    output_key: final
+    next: end
+
+  end:
+    type: end

@@ -1,0 +1,95 @@
+# code-reviewer: GitHub PR review with quality scoring + self-improvement
+#
+# Prerequisites:
+#   export GITHUB_TOKEN=ghp_...
+#
+# Usage:
+#   jamjet run workflow.yaml --input '{"repo": "owner/repo", "pr_number": 42}'
+
+workflow:
+  id: code-reviewer
+  version: 0.1.0
+  state_schema:
+    repo: str
+    pr_number: int
+    pr_data: dict
+    review: str
+    comment_url: str
+  start: fetch-pr
+
+nodes:
+  fetch-pr:
+    type: tool
+    server: github
+    tool: get_pull_request
+    arguments:
+      owner: "{{ state.repo.split('/')[0] }}"
+      repo: "{{ state.repo.split('/')[1] }}"
+      pull_number: "{{ state.pr_number }}"
+    output_key: pr_data
+    next: review
+
+  review:
+    type: model
+    model: claude-sonnet-4-6
+    system: |
+      You are an expert code reviewer. Provide thorough, constructive feedback.
+      Focus on: correctness, performance, security, readability, and test coverage.
+      Be specific — reference line numbers and file names where relevant.
+    prompt: |
+      Review this pull request:
+
+      Title: {{ state.pr_data.title }}
+      Description: {{ state.pr_data.body }}
+
+      Changed files:
+      {{ state.pr_data.files | join('\n') }}
+
+      Diff:
+      {{ state.pr_data.diff }}
+
+      Provide a structured review with:
+      1. Summary (1-2 sentences)
+      2. Issues found (critical → minor)
+      3. Suggestions for improvement
+      4. Overall verdict (approve / request changes / comment)
+    output_key: review
+    retry:
+      max_attempts: 2
+      backoff: constant
+      delay_ms: 2000
+    next: check-quality
+
+  check-quality:
+    type: eval
+    scorers:
+      - type: llm_judge
+        rubric: |
+          Is this code review:
+          - Thorough (covers correctness, security, performance)?
+          - Constructive (not just criticism but actionable suggestions)?
+          - Specific (references actual code, not generic advice)?
+          - Well-structured (clear verdict)?
+        min_score: 4
+        model: claude-haiku-4-5-20251001
+      - type: assertion
+        check: "len(output.review) >= 200"
+    on_fail: retry_with_feedback
+    max_retries: 2
+    next: post-comment
+
+  post-comment:
+    type: tool
+    server: github
+    tool: create_pull_request_review
+    arguments:
+      owner: "{{ state.repo.split('/')[0] }}"
+      repo: "{{ state.repo.split('/')[1] }}"
+      pull_number: "{{ state.pr_number }}"
+      body: "{{ state.review }}"
+      event: COMMENT
+    output_key: comment_url
+    next: end
+
+  end:
+    type: end

@@ -1,0 +1,89 @@
+# approval-workflow: human-in-the-loop approval gate
+#
+# Execution pauses at `await-approval` until you resume it with:
+#   jamjet resume <exec-id> --event human_approved --data '{"approved": true}'
+#   jamjet resume <exec-id> --event human_approved --data '{"approved": false}'
+#
+# Usage:
+#   jamjet run workflow.yaml --input '{"task": "Deploy v2.0 to production"}'
+
+workflow:
+  id: approval-workflow
+  version: 0.1.0
+  state_schema:
+    task: str
+    proposal: str
+    approved: bool
+    result: str
+    rejection_reason: str
+  start: propose
+
+nodes:
+  propose:
+    type: model
+    model: claude-sonnet-4-6
+    system: |
+      You are an operations agent. Propose a safe, detailed execution plan
+      for tasks. Be specific about what actions will be taken and their risks.
+    prompt: |
+      Propose an execution plan for this task:
+
+      {{ state.task }}
+
+      Include:
+      1. Steps to execute
+      2. Estimated impact
+      3. Rollback plan if something goes wrong
+      4. Risk assessment (low / medium / high)
+    output_key: proposal
+    next: await-approval
+
+  await-approval:
+    type: wait
+    event: human_approved
+    timeout_hours: 24
+    on_timeout: escalate
+    next: check-approved
+
+  check-approved:
+    type: branch
+    conditions:
+      - if: "state.approved == true"
+        next: execute
+    default: rejected
+
+  execute:
+    type: model
+    model: claude-sonnet-4-6
+    prompt: |
+      Execute this approved plan step by step:
+
+      Task: {{ state.task }}
+      Plan: {{ state.proposal }}
+
+      Report what was done and confirm completion.
+    output_key: result
+    next: end
+
+  rejected:
+    type: model
+    model: claude-haiku-4-5-20251001
+    prompt: |
+      The following plan was rejected: {{ state.proposal }}
+      Reason: {{ state.rejection_reason }}
+      Acknowledge the rejection and suggest alternatives.
+    output_key: result
+    next: end
+
+  escalate:
+    type: model
+    model: claude-haiku-4-5-20251001
+    prompt: |
+      The approval for the following task timed out after 24 hours:
+      {{ state.task }}
+      Draft an escalation notice for the on-call team.
+    output_key: result
+    next: end
+
+  end:
+    type: end

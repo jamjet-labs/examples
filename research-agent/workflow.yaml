@@ -1,0 +1,56 @@
+# research-agent: web search + synthesis
+#
+# Prerequisites:
+#   export BRAVE_API_KEY=...
+#   Configure brave-search MCP server in jamjet.toml
+#
+# Usage:
+#   jamjet run workflow.yaml --input '{"query": "Latest developments in AI agents"}'
+
+workflow:
+  id: research-agent
+  version: 0.1.0
+  state_schema:
+    query: str
+    search_results: list
+    report: str
+  start: search
+
+nodes:
+  search:
+    type: tool
+    server: brave-search
+    tool: web_search
+    arguments:
+      query: "{{ state.query }}"
+      count: 10
+    output_key: search_results
+    retry:
+      max_attempts: 3
+      backoff: exponential
+      delay_ms: 1000
+    next: synthesize
+
+  synthesize:
+    type: model
+    model: claude-sonnet-4-6
+    system: |
+      You are a research assistant that synthesizes information from web search results
+      into clear, structured reports. Always cite your sources.
+    prompt: |
+      Based on these search results:
+
+      {{ state.search_results | join('\n\n') }}
+
+      Write a comprehensive, well-structured research report answering:
+      {{ state.query }}
+
+      Include:
+      - Key findings
+      - Different perspectives where applicable
+      - Source citations
+    output_key: report
+    next: end
+
+  end:
+    type: end

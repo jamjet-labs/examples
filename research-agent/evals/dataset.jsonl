@@ -1,0 +1,5 @@
+{"id": "q1", "input": {"query": "What is event sourcing?"}, "expected": {}}
+{"id": "q2", "input": {"query": "How does the A2A protocol work?"}, "expected": {}}
+{"id": "q3", "input": {"query": "What are the best practices for prompt engineering?"}, "expected": {}}
+{"id": "q4", "input": {"query": "How do I deploy a Python application to Kubernetes?"}, "expected": {}}
+{"id": "q5", "input": {"query": "What is the difference between MCP and A2A?"}, "expected": {}}

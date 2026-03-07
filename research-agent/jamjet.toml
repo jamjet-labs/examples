@@ -1,0 +1,8 @@
+# MCP server configuration for research-agent
+# See: https://jamjet.dev/docs/mcp
+
+[[mcp.servers]]
+name = "brave-search"
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-brave-search"]
+env = { BRAVE_API_KEY = "${BRAVE_API_KEY}" }

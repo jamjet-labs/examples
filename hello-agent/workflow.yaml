@@ -1,0 +1,27 @@
+# hello-agent: minimal question-answering workflow
+#
+# Usage:
+#   jamjet validate workflow.yaml
+#   jamjet run workflow.yaml --input '{"query": "What is JamJet?"}'
+
+workflow:
+  id: hello-agent
+  version: 0.1.0
+  state_schema:
+    query: str
+    answer: str
+  start: think
+
+nodes:
+  think:
+    type: model
+    model: claude-haiku-4-5-20251001
+    prompt: |
+      Answer this question clearly and concisely:
+
+      {{ state.query }}
+    output_key: answer
+    next: end
+
+  end:
+    type: end
