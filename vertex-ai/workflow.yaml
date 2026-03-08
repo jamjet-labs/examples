@@ -1,0 +1,55 @@
+# vertex-ai: research agent powered by Gemini on Vertex AI
+#
+# Prerequisites:
+#   gcloud auth application-default login
+#   export OPENAI_API_KEY=$(gcloud auth print-access-token)
+#   export OPENAI_BASE_URL=https://${VERTEX_LOCATION}-aiplatform.googleapis.com/v1beta1/projects/${VERTEX_PROJECT}/locations/${VERTEX_LOCATION}/endpoints/openapi
+#   export VERTEX_PROJECT=your-gcp-project-id
+#   export VERTEX_LOCATION=us-central1
+#
+# Usage:
+#   jamjet run workflow.yaml --input '{"query": "What are the key trends in AI agents in 2025?"}'
+
+workflow:
+  id: vertex-ai-research
+  version: 0.1.0
+  state_schema:
+    query: str
+    outline: str
+    report: str
+  start: plan
+
+nodes:
+  plan:
+    type: model
+    model: google/gemini-2.0-flash-001
+    system: |
+      You are a research planner. Break down the user's query into
+      3-5 focused sub-questions that together will produce a complete answer.
+      Return only the numbered list of sub-questions, nothing else.
+    prompt: |
+      Query: {{ state.query }}
+
+      List the sub-questions to research:
+    output_key: outline
+    next: synthesize
+
+  synthesize:
+    type: model
+    model: google/gemini-2.0-flash-001
+    system: |
+      You are a research analyst. Given a query and a set of sub-questions,
+      write a thorough, well-structured report. Use clear headings.
+      Be concise but complete. Cite uncertainty where it exists.
+    prompt: |
+      Query: {{ state.query }}
+
+      Sub-questions to address:
+      {{ state.outline }}
+
+      Write the full research report:
+    output_key: report
+    next: end
+
+  end:
+    type: end

@@ -62,6 +62,7 @@ jamjet dev
 | [orchestrator](./orchestrator/) | Multi-agent delegation with A2A | A2A task node, parallel |
 | [data-pipeline](./data-pipeline/) | Extract, transform, load with checkpointing | Durability, parallel branches |
 | [sql-agent](./sql-agent/) | Natural language to SQL via MCP | PostgreSQL MCP server |
+| [vertex-ai](./vertex-ai/) | Gemini on Vertex AI as the model provider | OpenAI-compatible endpoint, token auth |
 
 ## Running an example
 

@@ -1,0 +1,3 @@
+{"input": {"query": "What is the Model Context Protocol (MCP)?"}, "expected": "open protocol", "tags": ["factual"]}
+{"input": {"query": "What are the differences between ReAct and Plan-and-Execute agent strategies?"}, "expected": "reasoning", "tags": ["comparison"]}
+{"input": {"query": "How does event sourcing help with durable AI agent execution?"}, "expected": "crash recovery", "tags": ["technical"]}
