@@ -15,6 +15,17 @@ Run:
 
 import asyncio
 import os
+from pathlib import Path
+
+# Load .env if present
+_env_file = Path(__file__).parent / ".env"
+if _env_file.exists():
+    for line in _env_file.read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, _, v = line.partition("=")
+            if v:
+                os.environ.setdefault(k.strip(), v.strip())
 
 from jamjet import task, tool
 
@@ -48,7 +59,6 @@ async def current_date() -> str:
 # ── Tasks (agents) ────────────────────────────────────────────────────────
 
 GEMINI_FLASH = "google/gemini-2.0-flash-001"
-GEMINI_PRO   = "google/gemini-2.0-pro-exp-02-05"
 
 
 @task(model=GEMINI_FLASH, tools=[current_date])
@@ -60,7 +70,7 @@ async def plan(query: str) -> str:
     """
 
 
-@task(model=GEMINI_PRO, tools=[current_date])
+@task(model=GEMINI_FLASH, tools=[current_date])
 async def synthesize(query_and_outline: str) -> str:
     """
     You are a research analyst. Write a thorough, well-structured report
