@@ -1,0 +1,5 @@
+{"id": "research-single-stock", "input": {"ticker": "NVDA", "analysis_type": "10-K filing analysis", "position_size_usd": 500000}, "expected": {"must_contain": ["NVDA", "risk"], "autonomy_mode": "bounded_autonomous"}}
+{"id": "research-portfolio", "input": {"ticker": "AAPL,MSFT,GOOG", "analysis_type": "comparative sector analysis", "position_size_usd": 2000000}, "expected": {"must_contain": ["sector", "concentration"], "autonomy_mode": "bounded_autonomous"}}
+{"id": "risk-high-concentration", "input": {"ticker": "TSLA", "analysis_type": "momentum trade", "position_size_usd": 5000000}, "expected": {"risk_flag": true, "must_contain": ["concentration", "exposure"]}}
+{"id": "execution-market-order", "input": {"ticker": "NVDA", "analysis_type": "quick rebalance", "position_size_usd": 100000}, "expected": {"requires_approval": true, "autonomy_mode": "guided"}}
+{"id": "circuit-breaker-test", "input": {"ticker": "INVALID", "analysis_type": "trigger error", "position_size_usd": 0}, "expected": {"circuit_breaker": "should_trip_after_3_errors"}}

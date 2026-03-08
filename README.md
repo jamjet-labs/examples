@@ -63,6 +63,12 @@ jamjet dev
 | [data-pipeline](./data-pipeline/) | Extract, transform, load with checkpointing | Durability, parallel branches |
 | [sql-agent](./sql-agent/) | Natural language to SQL via MCP | PostgreSQL MCP server |
 | [vertex-ai](./vertex-ai/) | Gemini on Vertex AI as the model provider | OpenAI-compatible endpoint, token auth |
+| | | |
+| **Enterprise** | | |
+| [healthcare-compliance](./healthcare-compliance/) | HIPAA-compliant patient intake | Policy engine, tool blocking, model allowlists |
+| [trading-agent](./trading-agent/) | Hedge fund pre-trade research pipeline | Autonomy enforcement, circuit breaker, guided mode |
+| [legal-research](./legal-research/) | Law firm AI research with cost caps | Token & cost budgets, crash-resilient state |
+| [fintech-audit](./fintech-audit/) | SOC2-compliant loan application | Audit trail, actor attribution, forensic correlation |
 
 ## Running an example
 

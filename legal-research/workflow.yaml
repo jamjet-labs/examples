@@ -1,0 +1,176 @@
+# legal-research: AI research assistant with token & cost budget enforcement
+#
+# Demonstrates:
+#   - Per-case token budget (500k total)
+#   - Per-case cost budget ($15 USD)
+#   - Multi-dimension budget checks (input, output, total, cost)
+#   - Budget state persistence across crashes (embedded in snapshot)
+#   - Graceful pause when budget exceeded (paralegal takes over)
+#
+# Usage:
+#   jamjet run workflow.yaml --input '{
+#     "case_id": "PATENT-2024-0847",
+#     "case_description": "Patent infringement: AI-generated code",
+#     "jurisdiction": "US Federal, Northern District of California",
+#     "max_precedents": 10
+#   }'
+
+workflow:
+  id: legal-research
+  version: 0.1.0
+
+  state_schema:
+    case_id: str
+    case_description: str
+    jurisdiction: str
+    max_precedents: int
+    complaint_summary: str
+    precedents: list[str]
+    analyses: list[str]
+    comparative_memo: str
+    budget_status: str
+
+  start: summarize-complaint
+
+  # ── Budget enforcement ─────────────────────────────────────────────
+  # The managing partner mandates:
+  #   - 500k total tokens per case (paralegal time is expensive, but so are tokens)
+  #   - $15 hard cost cap (the firm bills clients $800/hr, AI costs are overhead)
+  #   - Pause on exceeded (don't cancel — the partial results are still useful)
+  token_budget:
+    input_tokens: 350000          # max input tokens
+    output_tokens: 150000         # max output tokens
+    total_tokens: 500000          # overall cap
+  cost_budget_usd: 15.00
+  on_budget_exceeded: pause       # paralegal takes over with partial results
+
+nodes:
+  # ── Step 1: Summarize the complaint ────────────────────────────────
+  # Light step: ~2k input, ~1k output, ~$0.003
+  summarize-complaint:
+    type: model
+    model: claude-haiku-4-5-20251001
+    system: |
+      You are a legal research AI at a law firm. Provide concise, accurate
+      legal summaries. Cite relevant statutes and legal standards.
+    prompt: |
+      Case ID: {{ state.case_id }}
+      Jurisdiction: {{ state.jurisdiction }}
+
+      Summarize this case for the research team:
+      {{ state.case_description }}
+
+      Include:
+      1. Parties involved and their roles
+      2. Core legal claims and causes of action
+      3. Key factual allegations
+      4. Relevant statutes and legal standards
+      5. Jurisdictional basis
+    output_key: complaint_summary
+    next: search-precedents
+
+  # ── Step 2: Search for relevant precedents ─────────────────────────
+  # Medium step: ~5k input, ~3k output, ~$0.008
+  search-precedents:
+    type: model
+    model: claude-sonnet-4-6
+    system: |
+      You are a legal research AI specializing in case law. Find the most
+      relevant precedents for the given case. Prioritize:
+      1. Same jurisdiction, same legal issues
+      2. Recent decisions (last 5 years preferred)
+      3. Appellate and Supreme Court decisions
+      4. Cases with similar fact patterns
+    prompt: |
+      Case: {{ state.case_id }}
+      Summary: {{ state.complaint_summary }}
+      Jurisdiction: {{ state.jurisdiction }}
+      Max precedents to find: {{ state.max_precedents }}
+
+      Search for relevant case law. For each precedent, provide:
+      - Case name and citation
+      - Court and year
+      - Key holding
+      - Relevance to our case (1 sentence)
+    output_key: precedents
+    next: analyze-precedents
+
+  # ── Step 3: Analyze each precedent in depth ────────────────────────
+  # Heavy step: 8-15k tokens PER precedent. This is where budget matters.
+  # Analyzing 10 precedents at 12k tokens each = 120k tokens just here.
+  analyze-precedents:
+    type: model
+    model: claude-sonnet-4-6
+    system: |
+      You are a senior legal analyst. Perform deep analysis of the precedent
+      cases, focusing on how they apply to our case. Be thorough but concise —
+      your analysis will be reviewed by the attorney and costs are monitored.
+
+      IMPORTANT: If the budget is running low, prioritize the most relevant
+      cases and note which ones need further analysis by a human paralegal.
+    prompt: |
+      Case: {{ state.case_id }}
+      Our case summary: {{ state.complaint_summary }}
+      Precedents found: {{ state.precedents }}
+
+      For each precedent, analyze:
+      1. Key facts and how they compare to our case
+      2. Legal reasoning and holdings
+      3. How the court applied the relevant statute
+      4. Whether the ruling supports or undermines our position
+      5. Distinguishing factors (if unfavorable)
+      6. Potential for appeal or different interpretation
+
+      If you cannot analyze all precedents within your context, prioritize
+      the most impactful ones and list the rest for human follow-up.
+    output_key: analyses
+    next: draft-memo
+
+  # ── Step 4: Draft comparative memo ─────────────────────────────────
+  # Heavy output: ~15k input (all analyses), ~8k output (the memo)
+  draft-memo:
+    type: model
+    model: claude-sonnet-4-6
+    system: |
+      You are a senior legal associate drafting a research memorandum.
+      The memo will be reviewed by the partner and may be used in court filings.
+      Be precise, well-organized, and cite all sources.
+    prompt: |
+      Case: {{ state.case_id }} — {{ state.case_description }}
+      Jurisdiction: {{ state.jurisdiction }}
+
+      Complaint summary: {{ state.complaint_summary }}
+      Precedent analyses: {{ state.analyses }}
+
+      Draft a comprehensive research memorandum that includes:
+
+      I. QUESTION PRESENTED
+      II. SHORT ANSWER
+      III. STATEMENT OF FACTS
+      IV. DISCUSSION
+         A. Legal Standard
+         B. Analysis of Key Precedents
+         C. Application to Our Case
+         D. Potential Counterarguments
+      V. CONCLUSION AND RECOMMENDATION
+
+      Include proper legal citations throughout.
+    output_key: comparative_memo
+    next: budget-summary
+
+  # ── Step 5: Budget summary ─────────────────────────────────────────
+  budget-summary:
+    type: model
+    model: claude-haiku-4-5-20251001
+    prompt: |
+      Generate a brief budget status summary:
+      Case: {{ state.case_id }}
+      Research complete. Memo drafted.
+
+      Note: The runtime tracks actual token/cost usage automatically.
+      This step simply marks the workflow as complete.
+    output_key: budget_status
+    next: end
+
+  end:
+    type: end

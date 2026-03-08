@@ -1,0 +1,193 @@
+# fintech-audit: Loan application with SOC2-compliant audit trail
+#
+# Demonstrates:
+#   - Immutable audit log (append-only, no UPDATE/DELETE)
+#   - Actor attribution (human vs agent vs system)
+#   - Policy violation logging (blocked tools, approval gates)
+#   - HTTP request correlation (request_id, IP, method, path)
+#   - Tool call hashing (SHA-256 for replay detection)
+#
+# Usage:
+#   jamjet run workflow.yaml --input '{
+#     "applicant_name": "Jane Smith",
+#     "loan_amount": 750000,
+#     "loan_purpose": "commercial real estate",
+#     "credit_score": 720
+#   }'
+#
+# View audit trail:
+#   curl http://localhost:7700/audit?execution_id=<exec-id>
+
+workflow:
+  id: fintech-audit
+  version: 0.1.0
+
+  state_schema:
+    applicant_name: str
+    loan_amount: float
+    loan_purpose: str
+    credit_score: int
+    credit_analysis: str
+    risk_score: str
+    loan_decision: str
+    officer_review: str
+    final_status: str
+
+  start: credit-analysis
+
+  # ── Policy: protects applicant data ────────────────────────────────
+  # Every policy decision (allow, block, require_approval) is recorded
+  # in the audit log with the rule that matched and the policy scope.
+  policy:
+    blocked_tools:
+      - "delete_*"                # never delete applicant data
+      - "export_ssn_bulk"         # never bulk-export SSNs
+      - "modify_credit_score"     # never tamper with credit scores
+    require_approval_for:
+      - "approve_loan_over_500k"  # large loans need human sign-off
+      - "disburse_funds"          # fund disbursement needs approval
+    model_allowlist:
+      - "claude-sonnet-4-6"
+      - "claude-haiku-4-5-20251001"
+
+  # ── Budget ─────────────────────────────────────────────────────────
+  token_budget:
+    total_tokens: 200000
+  cost_budget_usd: 3.00
+  on_budget_exceeded: pause
+
+nodes:
+  # ── Step 1: Credit Analysis ────────────────────────────────────────
+  # Audit log captures: node_started (actor: system/worker-id),
+  # then node_completed with token usage.
+  # If the agent hallucinates delete_credit_report → policy_violation logged.
+  credit-analysis:
+    type: model
+    model: claude-sonnet-4-6
+    system: |
+      You are a credit analysis AI for a FinTech lending platform.
+      Analyze the applicant's creditworthiness based on their credit score
+      and loan parameters. Be thorough and objective.
+
+      IMPORTANT: You may ONLY analyze data. You must NEVER:
+      - Delete any applicant records
+      - Export SSN data
+      - Modify credit scores
+      Any such attempt will be blocked and logged by the policy engine.
+    prompt: |
+      Applicant: {{ state.applicant_name }}
+      Loan amount: ${{ state.loan_amount }}
+      Purpose: {{ state.loan_purpose }}
+      Credit score: {{ state.credit_score }}
+
+      Analyze:
+      1. Credit score assessment (excellent/good/fair/poor)
+      2. Debt-to-income ratio estimate
+      3. Loan-to-value assessment
+      4. Payment history indicators
+      5. Risk factors specific to the loan purpose
+    output_key: credit_analysis
+    next: risk-scoring
+
+  # ── Step 2: Risk Scoring ───────────────────────────────────────────
+  # Audit log captures: node_started, node_completed.
+  # Actor type: System (automated step, no human involvement).
+  risk-scoring:
+    type: model
+    model: claude-haiku-4-5-20251001
+    system: |
+      You are a risk scoring engine. Compute a risk score (1-10, where 10
+      is highest risk) based on the credit analysis. Output structured data.
+    prompt: |
+      Credit analysis: {{ state.credit_analysis }}
+      Loan amount: ${{ state.loan_amount }}
+      Purpose: {{ state.loan_purpose }}
+
+      Compute:
+      - Risk score (1-10)
+      - Risk category (LOW / MEDIUM / HIGH / VERY HIGH)
+      - Key risk factors (top 3)
+      - Mitigating factors
+    output_key: risk_score
+    next: loan-decision
+
+  # ── Step 3: Loan Decision ──────────────────────────────────────────
+  # If loan > $500k, the agent calls approve_loan_over_500k.
+  # Policy engine pauses execution → audit: tool_approval_required
+  # The tool_call_hash (SHA-256) is recorded for replay detection.
+  loan-decision:
+    type: model
+    model: claude-sonnet-4-6
+    system: |
+      You are a loan decision AI. Based on the credit analysis and risk
+      score, recommend approval or denial. For loans over $500,000, you
+      must call the approve_loan_over_500k tool — it will pause for
+      human loan officer review.
+    prompt: |
+      Applicant: {{ state.applicant_name }}
+      Loan amount: ${{ state.loan_amount }}
+      Credit analysis: {{ state.credit_analysis }}
+      Risk score: {{ state.risk_score }}
+
+      Make a lending decision:
+      1. Recommend: APPROVE / DENY / CONDITIONAL APPROVE
+      2. If approving > $500k: call approve_loan_over_500k
+      3. Conditions (if conditional): list required conditions
+      4. Reasoning: explain the decision
+    output_key: loan_decision
+    next: await-officer-review
+
+  # ── Step 4: Human Loan Officer Review ──────────────────────────────
+  # Audit log captures: approval_received with actor_type: Human,
+  # actor_id: the loan officer's user ID from the API token.
+  # This is the key SOC2 evidence: human oversight of AI decisions.
+  await-officer-review:
+    type: wait
+    event: loan_approved
+    timeout_hours: 48
+    on_timeout: escalate-timeout
+    next: check-approval
+
+  check-approval:
+    type: branch
+    conditions:
+      - if: "state.approved == true"
+        next: finalize-approved
+    default: finalize-denied
+
+  finalize-approved:
+    type: model
+    model: claude-haiku-4-5-20251001
+    prompt: |
+      Loan application APPROVED for {{ state.applicant_name }}.
+      Amount: ${{ state.loan_amount }}
+      Decision: {{ state.loan_decision }}
+
+      Generate a brief confirmation notice for the applicant.
+    output_key: final_status
+    next: end
+
+  finalize-denied:
+    type: model
+    model: claude-haiku-4-5-20251001
+    prompt: |
+      Loan application DENIED for {{ state.applicant_name }}.
+      Decision: {{ state.loan_decision }}
+
+      Generate a brief adverse action notice citing the specific reasons.
+      Include the applicant's right to dispute and obtain their credit report.
+    output_key: final_status
+    next: end
+
+  escalate-timeout:
+    type: model
+    model: claude-haiku-4-5-20251001
+    prompt: |
+      Loan application for {{ state.applicant_name }} (${{ state.loan_amount }})
+      has not been reviewed after 48 hours. Generate an escalation notice
+      for the senior loan officer.
+    output_key: final_status
+    next: end
+
+  end:
+    type: end

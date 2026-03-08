@@ -1,0 +1,170 @@
+# trading-agent: Pre-trade research with autonomy enforcement
+#
+# Demonstrates:
+#   - bounded_autonomous: research agent with iteration/cost/token limits
+#   - guided: execution agent requiring trader approval for every action
+#   - circuit breaker: stops agents after N consecutive errors
+#
+# Usage:
+#   jamjet run workflow.yaml --input '{
+#     "ticker": "NVDA",
+#     "analysis_type": "10-K filing deep analysis",
+#     "position_size_usd": 500000
+#   }'
+#
+#   # Approve the trade when prompted:
+#   jamjet resume <exec-id> --event trader_approved --data '{"approved": true}'
+
+workflow:
+  id: trading-agent
+  version: 0.1.0
+
+  state_schema:
+    ticker: str
+    analysis_type: str
+    position_size_usd: float
+    research_output: str
+    risk_assessment: str
+    order_proposal: str
+    execution_result: str
+
+  start: research
+
+  # Workflow-level budget
+  token_budget:
+    total_tokens: 200000
+  cost_budget_usd: 10.00
+  on_budget_exceeded: pause
+
+nodes:
+  # ── Research Agent: bounded_autonomous ─────────────────────────────
+  # May iterate up to 10 times, but must escalate if it exceeds
+  # $2 in LLM costs or 100k tokens. The CRO saw a runaway agent
+  # spend $47 in one night iterating over SEC filings.
+  research:
+    type: agent
+    agent_ref: quant-research-v2
+    autonomy:
+      level: bounded_autonomous
+      constraints:
+        max_iterations: 10
+        max_tool_calls: 50
+        token_budget: 100000       # 100k tokens per analysis
+        cost_budget_usd: 2.0      # $2 max per analysis run
+        time_budget_secs: 300     # 5 minute timeout
+        allowed_tools:
+          - search_sec_filings
+          - search_news
+          - analyze_sentiment
+          - parse_10k
+          - compute_ratios
+        blocked_tools:
+          - submit_order           # research agent must NEVER place orders
+          - cancel_order
+    circuit_breaker_threshold: 3
+    model: claude-sonnet-4-6
+    system: |
+      You are a quantitative research analyst at a hedge fund.
+      Analyze the given security by searching SEC filings, news, and sentiment data.
+      Be thorough but efficient — you have a limited iteration and cost budget.
+      If you cannot find sufficient data within your budget, summarize what you have
+      and flag the gaps for the analyst to investigate manually.
+    prompt: |
+      Ticker: {{ state.ticker }}
+      Analysis type: {{ state.analysis_type }}
+
+      Conduct your analysis:
+      1. Search recent SEC filings (10-K, 10-Q, 8-K)
+      2. Analyze news sentiment (last 30 days)
+      3. Compute key financial ratios
+      4. Identify risks and catalysts
+      5. Summarize with a BUY/HOLD/SELL preliminary signal
+    output_key: research_output
+    next: risk-assessment
+
+  # ── Risk Agent: bounded_autonomous ─────────────────────────────────
+  # Validates position size against risk limits. Fewer iterations needed.
+  risk-assessment:
+    type: agent
+    agent_ref: risk-validator-v1
+    autonomy:
+      level: bounded_autonomous
+      constraints:
+        max_iterations: 5
+        max_tool_calls: 20
+        token_budget: 50000
+        cost_budget_usd: 1.0
+        time_budget_secs: 120
+        allowed_tools:
+          - check_portfolio_exposure
+          - check_sector_concentration
+          - check_correlation_risk
+          - check_leverage_ratio
+    circuit_breaker_threshold: 3
+    model: claude-sonnet-4-6
+    system: |
+      You are a risk management AI at a hedge fund. Validate the proposed
+      position against portfolio risk limits. Check exposure, concentration,
+      correlation, and leverage constraints.
+    prompt: |
+      Ticker: {{ state.ticker }}
+      Proposed position: ${{ state.position_size_usd }}
+      Research findings: {{ state.research_output }}
+
+      Validate against risk limits:
+      1. Portfolio exposure (max 5% single name)
+      2. Sector concentration (max 25% per sector)
+      3. Correlation with existing positions
+      4. Leverage ratio impact
+      5. Risk-adjusted position recommendation
+    output_key: risk_assessment
+    next: propose-order
+
+  # ── Propose order (preparation step) ───────────────────────────────
+  propose-order:
+    type: model
+    model: claude-sonnet-4-6
+    system: |
+      You are a trade operations AI. Based on the research and risk assessment,
+      propose a specific order with exact parameters.
+    prompt: |
+      Research: {{ state.research_output }}
+      Risk assessment: {{ state.risk_assessment }}
+      Requested position: ${{ state.position_size_usd }}
+
+      Propose a specific order:
+      - Action: BUY / SELL / SHORT
+      - Ticker: {{ state.ticker }}
+      - Quantity: (computed from risk-adjusted position)
+      - Order type: MARKET / LIMIT (with price if limit)
+      - Time-in-force: DAY / GTC
+      - Stop-loss level
+    output_key: order_proposal
+    next: execute-trade
+
+  # ── Execution Agent: guided ────────────────────────────────────────
+  # EVERY action requires explicit trader approval. No exceptions.
+  # A rogue agent placing live orders could cost millions.
+  execute-trade:
+    type: agent
+    agent_ref: trade-executor-v1
+    autonomy:
+      level: guided                # every tool call requires approval
+      # No constraints needed — guided mode gates everything
+    circuit_breaker_threshold: 3   # broker API failure protection
+    model: claude-haiku-4-5-20251001
+    system: |
+      You are a trade execution AI. Submit the proposed order to the broker.
+      Every action you take will require trader approval before execution.
+      This includes order submission, modification, and cancellation.
+    prompt: |
+      Execute this approved order:
+      {{ state.order_proposal }}
+
+      Submit via submit_market_order or submit_limit_order.
+      Wait for the trader to approve each action.
+    output_key: execution_result
+    next: end
+
+  end:
+    type: end

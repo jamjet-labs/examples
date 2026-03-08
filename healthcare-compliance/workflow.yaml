@@ -1,0 +1,173 @@
+# healthcare-compliance: HIPAA-compliant patient intake with policy enforcement
+#
+# Demonstrates:
+#   - Tool blocking (delete_*, export_phi_bulk)
+#   - Approval gates (prescribe_medication, order_lab_*)
+#   - Model allowlists (only audited models may touch PHI)
+#   - Node-level policy overrides (triage uses a fine-tuned model)
+#   - Wildcard pattern matching
+#
+# Usage:
+#   jamjet run workflow.yaml --input '{
+#     "patient_id": "P-2024-8847",
+#     "symptoms": "chest pain, shortness of breath",
+#     "allergies": ["penicillin"]
+#   }'
+
+workflow:
+  id: healthcare-compliance
+  version: 0.1.0
+
+  state_schema:
+    patient_id: str
+    symptoms: str
+    allergies: list[str]
+    triage_result: str
+    analysis: str
+    medication_plan: str
+    lab_orders: list[str]
+    discharge_summary: str
+
+  start: triage
+
+  # ── Global policy: applies to every node in this workflow ──────────
+  policy:
+    blocked_tools:
+      - "delete_*"              # block ALL deletion tools (wildcard)
+      - "export_phi_bulk"       # block bulk PHI export
+    require_approval_for:
+      - "prescribe_medication"  # pharmacist must approve
+      - "order_lab_*"           # physician must approve all lab orders
+      - "discharge_patient"     # attending must sign off
+    model_allowlist:
+      - "claude-sonnet-4-6"
+      - "claude-haiku-4-5-20251001"
+
+  # ── Token + cost budget for the entire workflow ────────────────────
+  token_budget:
+    total_tokens: 500000        # 500k total tokens per patient intake
+  cost_budget_usd: 5.00         # $5 max per intake workflow
+  on_budget_exceeded: pause     # pause execution, alert attending physician
+
+nodes:
+  # ── Step 1: Triage ─────────────────────────────────────────────────
+  # Uses a fine-tuned triage model (ft-triage-v3) that is NOT in the
+  # global allowlist. The node-level policy override permits it here only.
+  triage:
+    type: model
+    model: ft-triage-v3
+    system: |
+      You are a hospital triage AI trained on emergency department protocols.
+      Classify the patient's symptoms by urgency: EMERGENT, URGENT, SEMI-URGENT, NON-URGENT.
+      List the top 3 differential diagnoses.
+      Flag any symptoms requiring immediate physician attention.
+    prompt: |
+      Patient ID: {{ state.patient_id }}
+      Presenting symptoms: {{ state.symptoms }}
+      Known allergies: {{ state.allergies | join(", ") }}
+
+      Classify urgency and provide differential diagnoses.
+    output_key: triage_result
+    next: symptom-analysis
+    # Node-level policy: allows ft-triage-v3 at THIS node only
+    policy:
+      model_allowlist:
+        - "claude-sonnet-4-6"
+        - "ft-triage-v3"
+
+  # ── Step 2: Symptom Analysis ───────────────────────────────────────
+  symptom-analysis:
+    type: model
+    model: claude-sonnet-4-6
+    system: |
+      You are a board-certified internal medicine physician AI assistant.
+      Analyze symptoms in the context of the triage classification.
+      Consider the patient's allergies when suggesting treatments.
+      Be thorough but concise — this will be reviewed by an attending.
+    prompt: |
+      Patient: {{ state.patient_id }}
+      Symptoms: {{ state.symptoms }}
+      Allergies: {{ state.allergies | join(", ") }}
+      Triage result: {{ state.triage_result }}
+
+      Provide:
+      1. Detailed symptom analysis
+      2. Recommended diagnostic tests
+      3. Initial treatment considerations (respecting allergies)
+      4. Red flags that require immediate escalation
+    output_key: analysis
+    next: medication-review
+
+  # ── Step 3: Medication Review ──────────────────────────────────────
+  # If the agent calls prescribe_medication, the policy engine will
+  # PAUSE execution and require pharmacist approval.
+  medication-review:
+    type: model
+    model: claude-sonnet-4-6
+    system: |
+      You are a clinical pharmacist AI. Based on the symptom analysis,
+      recommend medications. Call the prescribe_medication tool to submit
+      each prescription. The system will automatically pause for pharmacist
+      review before any prescription reaches the pharmacy.
+    prompt: |
+      Patient: {{ state.patient_id }}
+      Allergies: {{ state.allergies | join(", ") }}
+      Analysis: {{ state.analysis }}
+
+      Recommend appropriate medications. For each, specify:
+      - Drug name and dosage
+      - Route (oral, IV, IM)
+      - Frequency
+      - Duration
+      - Allergy cross-reference check
+    output_key: medication_plan
+    next: lab-orders
+
+  # ── Step 4: Lab Orders ─────────────────────────────────────────────
+  # order_lab_* triggers physician approval via the wildcard pattern.
+  lab-orders:
+    type: model
+    model: claude-haiku-4-5-20251001
+    system: |
+      You are a lab order assistant. Based on the analysis, recommend
+      appropriate lab tests. Call order_lab_cbc, order_lab_metabolic_panel,
+      or order_lab_urinalysis as needed. Each order will require physician approval.
+    prompt: |
+      Patient: {{ state.patient_id }}
+      Analysis: {{ state.analysis }}
+      Triage: {{ state.triage_result }}
+
+      Recommend necessary lab tests for this patient.
+    output_key: lab_orders
+    next: discharge-summary
+
+  # ── Step 5: Discharge Summary ──────────────────────────────────────
+  # If the LLM hallucinates a delete_patient_record call, the policy
+  # engine blocks it immediately — the call never reaches the tool.
+  discharge-summary:
+    type: model
+    model: claude-sonnet-4-6
+    system: |
+      You are a discharge summary AI. Create a comprehensive discharge
+      summary for the patient's medical record. Under NO circumstances
+      should you attempt to delete or modify existing patient records.
+    prompt: |
+      Patient: {{ state.patient_id }}
+      Symptoms: {{ state.symptoms }}
+      Triage: {{ state.triage_result }}
+      Analysis: {{ state.analysis }}
+      Medications: {{ state.medication_plan }}
+      Lab orders: {{ state.lab_orders }}
+
+      Generate a discharge summary including:
+      1. Chief complaint and presentation
+      2. Assessment and diagnosis
+      3. Treatment provided
+      4. Medications prescribed (with dosages)
+      5. Follow-up instructions
+      6. Warning signs to return to ER
+    output_key: discharge_summary
+    next: end
+
+  end:
+    type: end
