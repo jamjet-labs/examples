@@ -33,7 +33,21 @@ export OPENAI_API_KEY=$(gcloud auth print-access-token)
 > **Note:** Access tokens expire after 1 hour. For production, use the `google-auth` library
 > to refresh automatically — see [Token refresh in production](#token-refresh-in-production) below.
 
-## Run — Python SDK
+## Run — simple Python (no JamJet)
+
+Start here if you just want to hit Vertex AI with the OpenAI SDK directly:
+
+```bash
+python simple.py
+```
+
+Shows two approaches:
+- **single call** — one prompt, one response, no tools
+- **with tool** — manual tool loop with `current_date`
+
+## Run — JamJet @task/@tool
+
+Compare `simple.py` with this to see what JamJet removes:
 
 ```bash
 python workflow.py
