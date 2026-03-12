@@ -1,0 +1,146 @@
+# oauth-delegation: OAuth 2.0 delegated agent with scope narrowing
+#
+# Demonstrates:
+#   - RFC 8693 token exchange (user token → scoped agent token)
+#   - Scope narrowing (agent never exceeds user's permissions)
+#   - Per-step scope configuration (different nodes need different scopes)
+#   - Token validity checks (expired/revoked → clean error + escalation)
+#   - OAuth audit trail (every token exchange and API call logged)
+#
+# Usage:
+#   jamjet run workflow.yaml --input '{
+#     "employee_id": "emp-42",
+#     "employee_name": "Alice Chen",
+#     "amount": 350.00,
+#     "description": "Team lunch",
+#     "user_scopes": ["expenses:read", "expenses:write", "expenses:approve"]
+#   }'
+#
+# The runtime's OAuth module performs real RFC 8693 token exchanges
+# with your authorization server. Configure via environment:
+#   JAMJET_OAUTH_TOKEN_ENDPOINT=https://auth.example.com/token
+#   JAMJET_OAUTH_CLIENT_ID=expense-agent
+#   JAMJET_OAUTH_CLIENT_SECRET=...
+
+workflow:
+  id: oauth-expense-agent
+  version: 0.1.0
+
+  state_schema:
+    employee_id: str
+    employee_name: str
+    amount: float
+    description: str
+    user_scopes: list
+    effective_scopes: list
+    token_status: str
+    expense_status: str
+
+  start: authenticate
+
+  # ── OAuth config: agent-level scope configuration ──────────────────
+  oauth:
+    token_endpoint: "${JAMJET_OAUTH_TOKEN_ENDPOINT}"
+    grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
+    client_id: "${JAMJET_OAUTH_CLIENT_ID}"
+    client_secret: "${JAMJET_OAUTH_CLIENT_SECRET}"
+    subject_token_source: workflow_context
+    requested_scopes:
+      - "expenses:read"
+      - "expenses:write"
+    audience: "https://api.example.com/expenses"
+
+  policy:
+    blocked_tools:
+      - "delete_expense"
+      - "modify_approval"
+    model_allowlist:
+      - "claude-sonnet-4-6"
+      - "claude-haiku-4-5-20251001"
+
+nodes:
+  # ── Step 1: Token exchange and scope narrowing ─────────────────────
+  # The runtime calls exchange_token() with RFC 8693 parameters.
+  # Scope narrowing: requested scopes must be ⊆ user's scopes.
+  authenticate:
+    type: model
+    model: claude-haiku-4-5-20251001
+    system: |
+      You are an expense processing agent. Before accessing the
+      expense API, your token has been narrowed to only the scopes
+      the user has granted you. You cannot escalate privileges.
+
+      Available scopes: {{ state.effective_scopes }}
+    prompt: |
+      Employee: {{ state.employee_name }} ({{ state.employee_id }})
+      Amount: ${{ state.amount }}
+      Description: {{ state.description }}
+
+      Your effective scopes are: {{ state.effective_scopes }}
+      Confirm you have the necessary permissions to process this expense.
+    output_key: token_status
+    next: submit-expense
+
+    # Per-step OAuth scopes: this node only needs read
+    oauth_scopes:
+      required_scopes: ["expenses:read"]
+
+  # ── Step 2: Submit the expense (requires expenses:write) ──────────
+  # The runtime checks per-step scopes via resolve_node_scopes().
+  # If the agent token lacks expenses:write, this step fails cleanly.
+  submit-expense:
+    type: model
+    model: claude-sonnet-4-6
+    system: |
+      You are an expense submission agent. Create an expense report
+      using the employee's delegated permissions. You must have
+      the expenses:write scope to proceed.
+
+      IMPORTANT: You are acting on behalf of {{ state.employee_name }}.
+      Your token is scoped to: {{ state.effective_scopes }}
+      You cannot access resources outside these scopes.
+    prompt: |
+      Submit expense:
+        Employee: {{ state.employee_name }}
+        Amount: ${{ state.amount }}
+        Description: {{ state.description }}
+
+      Create the expense entry and return confirmation.
+    output_key: expense_status
+    next: route
+
+    # Per-step OAuth scopes: this node needs read + write
+    oauth_scopes:
+      required_scopes: ["expenses:read", "expenses:write"]
+
+  # ── Step 3: Route based on amount ──────────────────────────────────
+  route:
+    type: branch
+    conditions:
+      - if: "state.amount > 1000"
+        next: approval-required
+    default: end
+
+  # ── Step 4: Manager approval for large expenses ────────────────────
+  approval-required:
+    type: wait
+    event: expense_approved
+    timeout_hours: 48
+    on_timeout: escalate
+    next: end
+
+    # Per-step OAuth scopes: approval needs a different scope
+    oauth_scopes:
+      required_scopes: ["expenses:read", "expenses:approve"]
+
+  escalate:
+    type: model
+    model: claude-haiku-4-5-20251001
+    prompt: |
+      Expense for {{ state.employee_name }} (${{ state.amount }})
+      awaiting approval for over 48 hours. Escalate to finance director.
+    output_key: expense_status
+    next: end
+
+  end:
+    type: end

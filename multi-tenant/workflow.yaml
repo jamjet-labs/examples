@@ -1,0 +1,116 @@
+# multi-tenant: Tenant-isolated invoice processing
+#
+# Demonstrates:
+#   - Tenant-scoped workflow submission (X-Tenant-Id header)
+#   - Row-level data partitioning at the storage layer
+#   - Same workflow definition shared across tenants
+#   - Tenant-isolated audit logs and state
+#
+# Usage (tenant: acme):
+#   jamjet run workflow.yaml \
+#     --input '{"invoice_id": "INV-001", "vendor": "Office Supplies Co", "amount": 2500, "currency": "USD"}' \
+#     --tenant acme
+#
+# Usage (tenant: globex):
+#   jamjet run workflow.yaml \
+#     --input '{"invoice_id": "INV-042", "vendor": "Cloud Services Ltd", "amount": 75000, "currency": "USD"}' \
+#     --tenant globex
+#
+# Each tenant's data is fully isolated — acme cannot see globex's invoices,
+# executions, or audit logs.
+
+workflow:
+  id: multi-tenant-invoices
+  version: 0.1.0
+
+  state_schema:
+    invoice_id: str
+    vendor: str
+    amount: float
+    currency: str
+    status: str
+    approver: str
+    audit_note: str
+
+  start: validate
+
+  # ── Policy: shared across tenants ──────────────────────────────────
+  policy:
+    blocked_tools:
+      - "delete_invoice"
+      - "modify_amount"
+    model_allowlist:
+      - "claude-sonnet-4-6"
+      - "claude-haiku-4-5-20251001"
+
+nodes:
+  # ── Step 1: Validate invoice ──────────────────────────────────────
+  validate:
+    type: model
+    model: claude-haiku-4-5-20251001
+    system: |
+      You are an invoice validation agent. Check the invoice for:
+      1. Valid amount (positive, reasonable range)
+      2. Known vendor (check against vendor database)
+      3. Correct currency format
+      4. Duplicate detection (same vendor + amount within 24h)
+
+      Output: status (valid/invalid), any validation issues found.
+    prompt: |
+      Invoice ID: {{ state.invoice_id }}
+      Vendor: {{ state.vendor }}
+      Amount: {{ state.currency }} {{ state.amount }}
+
+      Validate this invoice. If amount > $10,000, flag for approval.
+    output_key: status
+    next: route
+
+  # ── Step 2: Route based on amount ─────────────────────────────────
+  route:
+    type: branch
+    conditions:
+      - if: "state.amount > 10000"
+        next: approval-required
+    default: auto-approve
+
+  # ── Step 3a: Auto-approve small invoices ──────────────────────────
+  auto-approve:
+    type: model
+    model: claude-haiku-4-5-20251001
+    prompt: |
+      Invoice {{ state.invoice_id }} from {{ state.vendor }} for
+      {{ state.currency }} {{ state.amount }} has been auto-approved.
+      Generate a brief processing confirmation.
+    output_key: audit_note
+    next: end
+
+  # ── Step 3b: Require approval for large invoices ──────────────────
+  approval-required:
+    type: wait
+    event: invoice_approved
+    timeout_hours: 72
+    on_timeout: escalate
+    next: process-approved
+
+  process-approved:
+    type: model
+    model: claude-haiku-4-5-20251001
+    prompt: |
+      Invoice {{ state.invoice_id }} from {{ state.vendor }} for
+      {{ state.currency }} {{ state.amount }} has been approved by a manager.
+      Generate a processing confirmation with the approval reference.
+    output_key: audit_note
+    next: end
+
+  escalate:
+    type: model
+    model: claude-haiku-4-5-20251001
+    prompt: |
+      Invoice {{ state.invoice_id }} ({{ state.currency }} {{ state.amount }})
+      has not been reviewed after 72 hours. Generate an escalation notice
+      for the finance director.
+    output_key: audit_note
+    next: end
+
+  end:
+    type: end

@@ -1,0 +1,146 @@
+# data-governance: PII-aware customer onboarding with redaction and retention
+#
+# Demonstrates:
+#   - PII detection (email, SSN, phone, credit card) via built-in regex detectors
+#   - PII redaction modes: mask, hash, remove
+#   - Data retention policies with automatic expiry
+#   - Audit trail with redacted entries (safe for compliance)
+#   - DataPolicyIr in workflow IR for runtime-level enforcement
+#
+# Usage:
+#   jamjet run workflow.yaml --input '{
+#     "customer_id": "CUST-7291",
+#     "full_name": "Jane Doe",
+#     "email": "jane.doe@example.com",
+#     "phone": "555-123-4567",
+#     "ssn": "123-45-6789",
+#     "credit_card": "4111-1111-1111-1234"
+#   }'
+#
+# The runtime's PII redaction engine automatically detects and masks
+# sensitive fields before they reach the audit log.
+
+workflow:
+  id: data-governance-onboarding
+  version: 0.1.0
+
+  state_schema:
+    customer_id: str
+    full_name: str
+    email: str
+    phone: str
+    ssn: str
+    credit_card: str
+    kyc_status: str
+    risk_flags: str
+    redacted_summary: str
+
+  start: detect-pii
+
+  # ── Data policy: controls PII handling at the runtime level ────────
+  # The runtime's PiiRedactor applies these rules automatically.
+  data_policy:
+    pii_detectors:
+      - email
+      - ssn
+      - phone
+      - credit_card
+      - ip_address
+    pii_fields:
+      - "$.email"
+      - "$.phone"
+      - "$.ssn"
+      - "$.credit_card"
+    redaction_mode: mask          # mask | hash | remove
+    retain_prompts: false         # strip prompts from audit log
+    retain_outputs: false         # strip outputs from audit log
+    retention_days: 90            # auto-purge audit entries after 90 days
+
+  policy:
+    blocked_tools:
+      - "export_pii_bulk"
+      - "send_unredacted_*"
+    model_allowlist:
+      - "claude-sonnet-4-6"
+      - "claude-haiku-4-5-20251001"
+
+nodes:
+  # ── Step 1: Detect PII fields ────────────────────────────────────
+  detect-pii:
+    type: model
+    model: claude-haiku-4-5-20251001
+    system: |
+      You are a PII detection agent. Identify which fields contain
+      personally identifiable information. Classify each field:
+      - email: email address pattern
+      - ssn: Social Security Number (XXX-XX-XXXX)
+      - phone: phone number
+      - credit_card: credit/debit card number
+      - name: personal name
+      Report the PII fields found and their risk level.
+    prompt: |
+      Customer ID: {{ state.customer_id }}
+      Name: {{ state.full_name }}
+      Email: {{ state.email }}
+      Phone: {{ state.phone }}
+      SSN: {{ state.ssn }}
+      Card: {{ state.credit_card }}
+
+      List all PII fields detected with their type and risk level.
+    output_key: risk_flags
+    next: kyc-verify
+
+  # ── Step 2: KYC verification (uses real PII) ─────────────────────
+  # The runtime has access to the real PII for verification,
+  # but the audit log only stores the redacted version.
+  kyc-verify:
+    type: model
+    model: claude-sonnet-4-6
+    system: |
+      You are a KYC verification agent. Verify the customer's identity
+      using their SSN and personal details. Check against:
+      1. Identity databases
+      2. Sanctions lists (OFAC, EU)
+      3. PEP (Politically Exposed Persons) databases
+
+      Report: verified / manual-review / rejected, with reasoning.
+    prompt: |
+      Customer: {{ state.full_name }} ({{ state.customer_id }})
+      SSN: {{ state.ssn }}
+      Email: {{ state.email }}
+
+      PII risk assessment: {{ state.risk_flags }}
+
+      Perform KYC verification and report status.
+    output_key: kyc_status
+    next: redact-and-store
+
+  # ── Step 3: Redact PII and produce safe summary ──────────────────
+  # After this step, all PII is masked. The runtime's PiiRedactor
+  # has already been processing state through the data_policy, but
+  # this step produces a human-readable redacted summary.
+  redact-and-store:
+    type: model
+    model: claude-haiku-4-5-20251001
+    system: |
+      You are a data governance agent. Produce a redacted summary
+      of the customer onboarding that is safe for the audit log.
+      Replace all PII with masked versions:
+      - Email: j***@***.com
+      - SSN: ***-**-6789
+      - Phone: ***-***-4567
+      - Card: ****-****-****-1234
+
+      Include: customer ID, KYC status, PII fields detected, retention period.
+    prompt: |
+      Customer: {{ state.full_name }} ({{ state.customer_id }})
+      KYC Status: {{ state.kyc_status }}
+      PII detected: {{ state.risk_flags }}
+
+      Generate a redacted summary safe for the compliance audit log.
+      Retention: 90 days.
+    output_key: redacted_summary
+    next: end
+
+  end:
+    type: end

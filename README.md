@@ -69,12 +69,18 @@ jamjet dev
 | [trading-agent](./trading-agent/) | Hedge fund pre-trade research pipeline | Autonomy enforcement, circuit breaker, guided mode |
 | [legal-research](./legal-research/) | Law firm AI research with cost caps | Token & cost budgets, crash-resilient state |
 | [fintech-audit](./fintech-audit/) | SOC2-compliant loan application | Audit trail, actor attribution, forensic correlation |
+| [multi-tenant](./multi-tenant/) | Tenant-isolated invoice processing | Tenant scoping, row-level isolation, shared definitions |
+| [data-governance](./data-governance/) | PII-aware customer onboarding | PII detection, redaction modes, retention policies |
+| [oauth-delegation](./oauth-delegation/) | OAuth 2.0 delegated expense agent | RFC 8693 token exchange, scope narrowing, per-step scoping |
 | | | |
 | **Java SDK** | | |
 | [java-hello-agent](./java-hello-agent/) | Minimal agent (Java) | Agent builder, IR validation |
 | [java-research-agent](./java-research-agent/) | Web search + plan-and-execute (Java) | `@Tool`, `ToolCall<T>`, multi-step |
 | [java-support-bot](./java-support-bot/) | Support ticket workflow (Java) | `Workflow.builder()`, record state, local exec |
 | [java-approval-workflow](./java-approval-workflow/) | Expense approval with HITL (Java) | IR submission, `JamjetClient`, human approval |
+| [java-multi-tenant](./java-multi-tenant/) | Tenant-isolated invoices (Java) | Multi-tenant, `JamjetClient`, tenant scoping |
+| [java-data-governance](./java-data-governance/) | PII redaction workflow (Java) | PII detection, masking, retention policies |
+| [java-oauth-agent](./java-oauth-agent/) | OAuth delegated agent (Java) | Scope narrowing, per-step scopes, audit trail |
 
 ## Running an example
 
