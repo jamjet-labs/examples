@@ -69,8 +69,16 @@ jamjet dev
 | [trading-agent](./trading-agent/) | Hedge fund pre-trade research pipeline | Autonomy enforcement, circuit breaker, guided mode |
 | [legal-research](./legal-research/) | Law firm AI research with cost caps | Token & cost budgets, crash-resilient state |
 | [fintech-audit](./fintech-audit/) | SOC2-compliant loan application | Audit trail, actor attribution, forensic correlation |
+| | | |
+| **Java SDK** | | |
+| [java-hello-agent](./java-hello-agent/) | Minimal agent (Java) | Agent builder, IR validation |
+| [java-research-agent](./java-research-agent/) | Web search + plan-and-execute (Java) | `@Tool`, `ToolCall<T>`, multi-step |
+| [java-support-bot](./java-support-bot/) | Support ticket workflow (Java) | `Workflow.builder()`, record state, local exec |
+| [java-approval-workflow](./java-approval-workflow/) | Expense approval with HITL (Java) | IR submission, `JamjetClient`, human approval |
 
 ## Running an example
+
+### YAML / Python examples
 
 ```bash
 cd hello-agent
@@ -90,18 +98,35 @@ Inspect the result:
 jamjet inspect <exec-id>
 ```
 
+### Java examples
+
+Requires JDK 21+:
+
+```bash
+cd java-support-bot
+mvn compile exec:java
+```
+
+For agent examples that call LLMs:
+
+```bash
+export OPENAI_API_KEY=sk-...
+cd java-research-agent
+mvn compile exec:java
+```
+
 ## Structure
 
 Each example is self-contained:
 
 ```
-hello-agent/
-├── workflow.yaml      # YAML workflow definition (always present)
-├── workflow.py        # Python SDK equivalent (where applicable)
-├── jamjet.toml        # MCP server config (where needed)
+hello-agent/                          java-hello-agent/
+├── workflow.yaml                     ├── pom.xml
+├── workflow.py                       ├── src/main/java/.../HelloAgent.java
+├── jamjet.toml                       └── README.md
 ├── evals/
-│   └── dataset.jsonl  # Eval dataset (where applicable)
-└── README.md          # Example-specific docs
+│   └── dataset.jsonl
+└── README.md
 ```
 
 ## Contributing
